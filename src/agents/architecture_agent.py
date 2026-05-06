@@ -18,7 +18,7 @@ PROMPT = """\
    - 좋은 예: `API["FastAPI 서버 (src/main.py)"]`
    - 나쁜 예: `API[FastAPI 서버 (src/main.py)]` ← 괄호 때문에 파싱 실패
 3. **화살표 라벨도 따옴표**: `A -->|"요청"| B`
-4. **shape: `[]` (rectangle), `()` (rounded), `[(  )]` (cylinder=DB), `{}` (rhombus=decision)**
+4. **shape: `[]` (rectangle), `()` (rounded), `[(  )]` (cylinder=DB), `{{}}` (rhombus=decision)**
 5. **subgraph는 영문 ID + 따옴표 라벨**: `subgraph G1["그룹 이름"]`
 6. 줄 끝 세미콜론 X. 한 줄 한 노드/엣지.
 
