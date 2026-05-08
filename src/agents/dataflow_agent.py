@@ -78,7 +78,15 @@ def _sanitize_mermaid(code: str) -> str:
     if not (first.startswith("flowchart") or first.startswith("graph")
             or first.startswith("sequencediagram")):
         lines.insert(0, "flowchart LR")
-    return "\n".join(lines)
+    code = "\n".join(lines)
+    # cylinder 안 중첩 라벨: A[(B["text"])] → A[("text")]
+    code = re.sub(r'\[\(\s*\w+\s*\[\s*"([^"]*)"\s*\]\s*\)\]', r'[("\1")]', code)
+    # 한 줄에 여러 엣지 분리
+    code = re.sub(
+        r'(\]|\))\s*([A-Z][A-Za-z0-9_]*\s+(?:-->|---|->|->>|-->>|--))',
+        r'\1\n    \2', code,
+    )
+    return code
 
 
 def run(ctx: RepoContext) -> str:

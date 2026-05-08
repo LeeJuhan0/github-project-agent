@@ -18,6 +18,7 @@ import logging
 import os
 import platform
 import re
+import tempfile
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -38,8 +39,9 @@ from src.models.template import NotionTemplate
 
 log = logging.getLogger(__name__)
 
-KROKI_BASE = "https://kroki.io"
-KROKI_TIMEOUT = 15
+KROKI_BASE = os.environ.get("KROKI_URL", "https://kroki.io")
+# 로컬 Kroki(docker compose)면 ~100ms, 공개 인스턴스는 콜드 스타트로 늦음.
+KROKI_TIMEOUT = int(os.environ.get("KROKI_TIMEOUT", "30"))
 
 # OS별 한글 폰트 후보
 # reportlab은 .ttc (TrueType Collection) 못 읽음 ("postscript outlines not supported").
@@ -171,34 +173,50 @@ th {{ background: #faf9f7; font-weight: bold; }}
 # Mermaid → Kroki PNG
 # ============================================================
 
-def _mermaid_kroki_png_b64(mermaid_text: str) -> Optional[str]:
-    """Kroki API로 Mermaid → PNG → base64 data URI. 실패 시 None."""
+def _mermaid_kroki_png_bytes(mermaid_text: str) -> Optional[bytes]:
+    """Kroki API로 Mermaid → PNG (bytes). POST 방식. 실패 시 None."""
     try:
-        encoded = base64.urlsafe_b64encode(
-            zlib.compress(mermaid_text.encode("utf-8"), 9)
-        ).decode()
-        url = f"{KROKI_BASE}/mermaid/png/{encoded}"
-        r = requests.get(url, timeout=KROKI_TIMEOUT)
+        url = f"{KROKI_BASE}/mermaid/png"
+        r = requests.post(
+            url,
+            data=mermaid_text.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+            timeout=KROKI_TIMEOUT,
+        )
         if r.status_code == 200 and r.headers.get("content-type", "").startswith("image/"):
-            b64 = base64.b64encode(r.content).decode()
-            return f"data:image/png;base64,{b64}"
-        log.warning("Kroki 응답 %d %s", r.status_code, r.headers.get("content-type"))
+            return r.content
+        log.warning("Kroki POST %d %s err=%s",
+                    r.status_code, r.headers.get("content-type"), r.text[:200])
     except Exception as e:
         log.warning("Kroki 호출 실패: %s", e)
     return None
 
 
+# 호환용 (다른 모듈이 참조 가능) — bytes를 base64 data URI로 래핑
+def _mermaid_kroki_png_b64(mermaid_text: str) -> Optional[str]:
+    b = _mermaid_kroki_png_bytes(mermaid_text)
+    return f"data:image/png;base64,{base64.b64encode(b).decode()}" if b else None
+
+
 MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n([\s\S]+?)\n```", re.MULTILINE)
 
 
-def _replace_mermaid_with_images(markdown_text: str) -> str:
-    """```mermaid ... ``` 블록을 <img> 태그로 치환. 실패 시 일반 코드블록."""
+def _replace_mermaid_with_images(markdown_text: str, tmpdir: str) -> str:
+    """```mermaid ... ``` 블록을 <img src=tmpfile.png> 로 치환.
+
+    xhtml2pdf는 data: URI를 PDF에 임베드 못 하므로 PNG를 임시 파일로 저장 후
+    절대경로를 src로 사용. tmpdir 안의 파일들은 호출자가 정리(자동 cleanup)."""
     def repl(m: re.Match) -> str:
         mer = m.group(1).strip()
-        b64 = _mermaid_kroki_png_b64(mer)
-        if b64:
-            return f'\n<div class="diagram"><img src="{b64}" alt="diagram" /></div>\n'
-        # 폴백
+        png = _mermaid_kroki_png_bytes(mer)
+        if png:
+            f = tempfile.NamedTemporaryFile(
+                prefix="mmd_", suffix=".png", dir=tmpdir, delete=False,
+            )
+            f.write(png)
+            f.close()
+            return f'\n<div class="diagram"><img src="{f.name}" alt="diagram" /></div>\n'
+        # 폴백 — 일반 코드블록
         return f"```\n{mer}\n```"
     return MERMAID_BLOCK_RE.sub(repl, markdown_text)
 
@@ -227,29 +245,39 @@ def render_pdf(
     if not md_text.strip():
         raise RuntimeError("렌더할 내용이 비어있음 (template.preview_md / story.merged 둘 다 없음)")
 
-    md_text = _replace_mermaid_with_images(md_text)
+    # Mermaid PNG는 임시 파일로 저장 — PDF 생성 후 자동 정리
+    with tempfile.TemporaryDirectory(prefix="mmd_pdf_") as tmpdir:
+        md_text = _replace_mermaid_with_images(md_text, tmpdir)
 
-    html_body = md_lib.markdown(
-        md_text,
-        extensions=["fenced_code", "tables", "nl2br", "sane_lists"],
-    )
-    css = _build_css(font_name)
-    full_html = (
-        f'<!DOCTYPE html><html><head><meta charset="utf-8">'
-        f"<style>{css}</style></head><body>{html_body}</body></html>"
-    )
-
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_path = out_dir / f"{ctx.owner}_{ctx.name}_{template.id}_{ts}.pdf"
-
-    with out_path.open("wb") as f:
-        result = pisa.CreatePDF(
-            io.StringIO(full_html),
-            dest=f,
-            encoding="utf-8",
+        html_body = md_lib.markdown(
+            md_text,
+            extensions=["fenced_code", "tables", "nl2br", "sane_lists"],
         )
-    if result.err:
-        raise RuntimeError(f"PDF 생성 실패: err count={result.err}")
+        css = _build_css(font_name)
+        full_html = (
+            f'<!DOCTYPE html><html><head><meta charset="utf-8">'
+            f"<style>{css}</style></head><body>{html_body}</body></html>"
+        )
+
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_path = out_dir / f"{ctx.owner}_{ctx.name}_{template.id}_{ts}.pdf"
+
+        # link_callback: xhtml2pdf의 default callback이 절대 경로 file을 못 찾을 수 있어
+        # 명시적으로 그대로 반환. <img src="/tmp/..."> 가 PDF에 임베드되도록.
+        def _link_cb(uri: str, _rel: str) -> str:
+            if uri.startswith(("/", "file://")):
+                return uri
+            return uri
+
+        with out_path.open("wb") as f:
+            result = pisa.CreatePDF(
+                io.StringIO(full_html),
+                dest=f,
+                encoding="utf-8",
+                link_callback=_link_cb,
+            )
+        if result.err:
+            raise RuntimeError(f"PDF 생성 실패: err count={result.err}")
 
     log.info("PDF 저장: %s", out_path)
     return out_path

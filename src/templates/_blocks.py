@@ -2,8 +2,41 @@
 import re
 
 
+# 인라인 마크다운: **bold**, *italic*, `code`. Notion rich_text annotations로 분할.
+_INLINE_RE = re.compile(r"(\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`)")
+
+
 def _rt(text: str) -> list[dict]:
-    return [{"type": "text", "text": {"content": text}}]
+    """인라인 마크다운을 Notion rich_text 배열로. **bold**/*italic*/`code` 처리."""
+    parts: list[dict] = []
+    last = 0
+    for m in _INLINE_RE.finditer(text):
+        if m.start() > last:
+            parts.append({"type": "text", "text": {"content": text[last:m.start()]}})
+        if m.group(2):  # **bold**
+            parts.append({
+                "type": "text",
+                "text": {"content": m.group(2)},
+                "annotations": {"bold": True},
+            })
+        elif m.group(3):  # *italic*
+            parts.append({
+                "type": "text",
+                "text": {"content": m.group(3)},
+                "annotations": {"italic": True},
+            })
+        elif m.group(4):  # `code`
+            parts.append({
+                "type": "text",
+                "text": {"content": m.group(4)},
+                "annotations": {"code": True},
+            })
+        last = m.end()
+    if last < len(text):
+        parts.append({"type": "text", "text": {"content": text[last:]}})
+    # 빈 콘텐츠 제거 — Notion API 거부 가능
+    parts = [p for p in parts if p["text"]["content"]]
+    return parts or [{"type": "text", "text": {"content": text or ""}}]
 
 
 def para(text: str) -> dict:
