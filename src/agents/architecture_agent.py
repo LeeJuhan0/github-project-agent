@@ -18,7 +18,7 @@ PROMPT = """\
    - 좋은 예: `API["FastAPI 서버 (src/main.py)"]`
    - 나쁜 예: `API[FastAPI 서버 (src/main.py)]` ← 괄호 때문에 파싱 실패
 3. **화살표 라벨도 따옴표**: `A -->|"요청"| B`
-4. **shape: `[]` (rectangle), `()` (rounded), `[(  )]` (cylinder=DB), `{}` (rhombus=decision)**
+4. **shape: `[]` (rectangle), `()` (rounded), `[(  )]` (cylinder=DB), `{{}}` (rhombus=decision)**
 5. **subgraph는 영문 ID + 따옴표 라벨**: `subgraph G1["그룹 이름"]`
 6. 줄 끝 세미콜론 X. 한 줄 한 노드/엣지.
 
@@ -60,7 +60,6 @@ def _strip_fence(text: str) -> str:
 
 def _sanitize_mermaid(code: str) -> str:
     """LLM 출력의 흔한 실수 자동 보정."""
-    # 첫 줄에 'graph TD' 같은 거 있어도 OK, 없으면 prepend
     lines = [ln.rstrip() for ln in code.splitlines() if ln.strip()]
     if not lines:
         return "flowchart TD\n    Empty[\"(다이어그램 비어있음)\"]"
@@ -68,7 +67,15 @@ def _sanitize_mermaid(code: str) -> str:
     if not (first.startswith("flowchart") or first.startswith("graph")
             or first.startswith("sequencediagram")):
         lines.insert(0, "flowchart TD")
-    return "\n".join(lines)
+    code = "\n".join(lines)
+    # cylinder 안에 또 다른 노드 라벨 중첩: A[(B["text"])] → A[("text")]
+    code = re.sub(r'\[\(\s*\w+\s*\[\s*"([^"]*)"\s*\]\s*\)\]', r'[("\1")]', code)
+    # 닫는 괄호/대괄호 직후 영문 식별자 + 화살표가 붙어 한 줄에 두 엣지: ]API --> → ]\n    API -->
+    code = re.sub(
+        r'(\]|\))\s*([A-Z][A-Za-z0-9_]*\s+(?:-->|---|->|->>|-->>|--))',
+        r'\1\n    \2', code,
+    )
+    return code
 
 
 def run(ctx: RepoContext) -> str:

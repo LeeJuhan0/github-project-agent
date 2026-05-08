@@ -206,7 +206,7 @@ docker compose up --build
 | `NOTION_PARENT_PAGE_ID` | 발행 시 | 새 페이지 부모 page id |
 | `GITHUB_PAT` | Private 레포만 | 기본 PAT (UI에서도 입력 가능) |
 | `MAX_REFINE_ITER` | | 재생성 최대 (기본 3) |
-| `SCORE_THRESHOLD` | | 통과 점수 (기본 90, 섹션별) |
+| `SCORE_THRESHOLD` | | 통과 점수 (기본 80, 4섹션 **평균**) |
 
 ## 템플릿 (6개)
 
@@ -263,8 +263,8 @@ github-portfolio-agent/
 
 ## 채점/재생성 규칙
 
-- 4섹션 각각 0-100, **섹션별 ≥ 90** 통과.
-- 미통과 시 가장 앞쪽 약한 섹션부터 끝까지 cascade 재생성 (예: `status` 89 → `status,cause,result` 재생성).
+- 4섹션 각각 0-100, **평균 ≥ 80** 이면 통과 (`SCORE_THRESHOLD`).
+- 미통과 시 **가장 낮은 점수 섹션부터 끝까지** cascade 재생성 (예: `status`가 가장 낮으면 `status,cause,result` 재생성).
 - 최대 3 라운드. 못 넘기면 마지막 결과 반환.
 
 ## 출력 옵션

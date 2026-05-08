@@ -95,16 +95,23 @@ def run(draft: StoryDraft, threshold: int = config.SCORE_THRESHOLD) -> Verdict:
         return Verdict(scores=scores, weakest="problem", overall_pass=False)
 
     scores = [SectionScore(**s) for s in parsed["scores"]]
-    score_map = {s.name: s for s in scores}
+
+    # 통과 기준: 4섹션 평균 ≥ threshold (기본 80).
+    # weakest = 가장 낮은 점수 섹션 (재생성 시 cascade 시작점) — 통과 시에도 None.
+    avg = sum(s.score for s in scores) / len(scores) if scores else 0
+    overall_pass = avg >= threshold
 
     weakest: SectionName | None = None
-    for name in SECTION_ORDER:
-        if score_map[name].score < threshold:
-            weakest = name
-            break
+    if not overall_pass:
+        # 점수 동률이면 SECTION_ORDER 앞쪽 우선
+        order_idx = {n: i for i, n in enumerate(SECTION_ORDER)}
+        weakest = min(scores, key=lambda s: (s.score, order_idx[s.name])).name
+
+    log.info("validator: avg=%.1f threshold=%d pass=%s weakest=%s",
+             avg, threshold, overall_pass, weakest)
 
     return Verdict(
         scores=scores,
         weakest=weakest,
-        overall_pass=weakest is None,
+        overall_pass=overall_pass,
     )
